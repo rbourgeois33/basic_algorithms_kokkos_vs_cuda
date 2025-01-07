@@ -138,7 +138,7 @@ void stencil_cuda(const int MemSizeArraysMB)
 }
 
 template <typename _TYPE_, int radius>
-void stencil_cuda_shared_memory(const int MemSizeArraysMB, const int sharedMemPerBlock)
+void stencil_cuda_shared_memory(const int MemSizeArraysMB)
 {
 
     // dimension problem
@@ -199,9 +199,9 @@ void stencil_cuda_shared_memory(const int MemSizeArraysMB, const int sharedMemPe
     std::cout << "\n** stencil_cuda_shared_memory_kernel **\n";
     std::cout << "error = " << err << "\n";
     std::cout << "elapsed time = " << ms << " ms\n";
-    std::cout << "memory FLOPS        = " << tflops << " TFLOPS\n";
-    std::cout << "memory bandwith     = " << bw << " GB/s\n";
-    std::cout << "memory allocation per block = " << shared_memory_size/KB << "KB \n";
+    std::cout << "FLOPS        = " << tflops << " TFLOPS\n";
+    std::cout << "bandwith     = " << bw << " GB/s\n";
+    std::cout << "shared memory allocated per block = " << shared_memory_size/KB << "KB \n";
 
 
     // Cleanup

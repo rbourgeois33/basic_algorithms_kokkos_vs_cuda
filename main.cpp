@@ -26,6 +26,7 @@ int main(int argc, char *argv[])
     std::cout << "  Compute capability: " << prop.major << "." << prop.minor << std::endl;
     std::cout << "  Total global memory: " << GlobalGMem_MB << " MB" << std::endl;
     std::cout << "  Multiprocessors: " << prop.multiProcessorCount << std::endl;
+    std::cout << "  Max blocks per SM: " << prop.maxBlocksPerMultiProcessor << std::endl;
     std::cout << "  Max threads per block: " << prop.maxThreadsPerBlock << std::endl;
     std::cout << "  Max sharedMemPerBlock: " << prop.sharedMemPerBlock/KB <<"KB" <<std::endl;
     // We use arrays of memsize of a 100th of the global GMem
@@ -41,9 +42,9 @@ int main(int argc, char *argv[])
     Kokkos::finalize();
 
     { // CUDA tests
-        const int radius = 7;
+        const int radius = 50;//The larger the radius, the bigger the perf increase with shared mem
         stencil_cuda<float, radius>(MemSizeArraysMB);
-        stencil_cuda_shared_memory<float, radius>(MemSizeArraysMB, prop.sharedMemPerBlock);
+        stencil_cuda_shared_memory<float, radius>(MemSizeArraysMB);
     }
 
     return 0;
