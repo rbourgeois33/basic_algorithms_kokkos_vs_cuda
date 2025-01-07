@@ -118,7 +118,8 @@ void stencil_cuda(const int MemSizeArraysMB)
     cudaEventElapsedTime(&ms, start, stop);
 
     long operations = NREPEAT_KERNEL * static_cast<long>(N - 2 * radius) * (2 * radius + 1);         // number of operations
-    long mem_accesses = NREPEAT_KERNEL * static_cast<long>(N - 2 * radius) * (1 + (2 * radius + 1)); // number of memory accesses
+    //number of memory accesses, assuming perfect caching, input is read, output is modified and read 3xN
+    long mem_accesses = NREPEAT_KERNEL * static_cast<long>(N - 2 * radius) * 3; 
 
     float tflops = operations / (ms / 1000.0f) / 1e12;
     float bw = sizeof(_TYPE_) * mem_accesses / (ms / 1000.0f) / GB;
@@ -126,7 +127,7 @@ void stencil_cuda(const int MemSizeArraysMB)
     std::cout << "error = " << err << "\n";
     std::cout << "elapsed time = " << ms << " ms\n";
     std::cout << "FLOPS        = " << tflops << " TFLOPS\n";
-    std::cout << "bandwith     = " << bw << " GB/s\n";
+    std::cout << "bandwith (assuming perfect caching) = " << bw << " GB/s\n";
 
     // Cleanup
     cudaFree(input);
@@ -191,17 +192,19 @@ void stencil_cuda_shared_memory(const int MemSizeArraysMB)
     float ms;
     cudaEventElapsedTime(&ms, start, stop);
 
-    long operations = NREPEAT_KERNEL * static_cast<long>(N - 2 * radius) * (2 * radius + 1);         // number of operations
-    long mem_accesses = NREPEAT_KERNEL * static_cast<long>(N - 2 * radius) * (1 + (2 * radius + 1)); // number of memory accesses
+    long operations = NREPEAT_KERNEL * static_cast<long>(N - 2 * radius) * (2 * radius + 1);// number of operations
+    //number of memory accesses, assuming perfect caching, input is read, output is modified and read 3xN
+    long mem_accesses = NREPEAT_KERNEL * static_cast<long>(N - 2 * radius) * 3; 
 
     float tflops = operations / (ms / 1000.0f) / 1e12;
     float bw = sizeof(_TYPE_) * mem_accesses / (ms / 1000.0f) / GB;
+
     std::cout << "\n** stencil_cuda_shared_memory_kernel **\n";
     std::cout << "error = " << err << "\n";
     std::cout << "elapsed time = " << ms << " ms\n";
     std::cout << "FLOPS        = " << tflops << " TFLOPS\n";
     std::cout << "bandwith     = " << bw << " GB/s\n";
-    std::cout << "shared memory allocated per block = " << shared_memory_size/KB << "KB \n";
+    std::cout << "shared memory allocated per block = " << ((float)shared_memory_size)/KB << "KB \n";
 
 
     // Cleanup

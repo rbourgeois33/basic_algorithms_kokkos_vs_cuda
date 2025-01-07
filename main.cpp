@@ -7,7 +7,7 @@
 #define GB (1e9)
 #define MB (1024 * 1024)
 #define KB 1024
-#define BLOCK_SIZE 512
+#define BLOCK_SIZE 256
 #define NREPEAT_KERNEL 10
 #define NREPEAT_MEMCPY 10
 
@@ -29,8 +29,9 @@ int main(int argc, char *argv[])
     std::cout << "  Max blocks per SM: " << prop.maxBlocksPerMultiProcessor << std::endl;
     std::cout << "  Max threads per block: " << prop.maxThreadsPerBlock << std::endl;
     std::cout << "  Max sharedMemPerBlock: " << prop.sharedMemPerBlock/KB <<"KB" <<std::endl;
+
     // We use arrays of memsize of a 100th of the global GMem
-    const int MemSizeArraysMB = GlobalGMem_MB / 100;
+    const int MemSizeArraysMB = GlobalGMem_MB / 50;
 
     // Initialize Kokkos runtime
     Kokkos::initialize(argc, argv);
@@ -42,7 +43,7 @@ int main(int argc, char *argv[])
     Kokkos::finalize();
 
     { // CUDA tests
-        const int radius = 50;//The larger the radius, the bigger the perf increase with shared mem
+        const int radius = 10;//The larger the radius, the bigger the perf increase with shared mem
         stencil_cuda<float, radius>(MemSizeArraysMB);
         stencil_cuda_shared_memory<float, radius>(MemSizeArraysMB);
     }
