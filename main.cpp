@@ -45,7 +45,6 @@ int main(int argc, char *argv[])
     { // CUDA tests
         const int radius = 10;//The larger the radius, the bigger the perf increase with shared mem
         stencil_cuda<float, radius>(MemSizeArraysMB);
-        stencil_cuda_shared_memory<float, radius>(MemSizeArraysMB);
     }
 
     return 0;

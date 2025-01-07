@@ -87,11 +87,14 @@ void stencil_cuda(const int MemSizeArraysMB)
     dim3 block(BLOCK_SIZE);
     dim3 grid((N + BLOCK_SIZE - 1) / BLOCK_SIZE);
 
+    // Shared memory size computation
+    const int shared_memory_size = (BLOCK_SIZE + 2 * radius) * sizeof(_TYPE_);
+
     // Initialize data
     set_to<_TYPE_><<<grid, block>>>(input, 1, N);
     set_to<_TYPE_><<<grid, block>>>(output, 0, N);
 
-    // Check kernel works
+    // Check 1st kernel works
     stencil_cuda_kernel<_TYPE_, radius><<<grid, block>>>(input, output, N);
     cudaMemcpy(h_output, output, dataSize, cudaMemcpyDeviceToHost);
 
@@ -101,8 +104,26 @@ void stencil_cuda(const int MemSizeArraysMB)
         err += abs(h_output[i] - (2 * radius + 1));
     }
 
-    // Measure kernel execution time
+    // re-initialize data
+    set_to<_TYPE_><<<grid, block>>>(input, 1, N);
+    set_to<_TYPE_><<<grid, block>>>(output, 0, N);
+
+    // Check 2n kernel works
+    stencil_cuda_shared_memory_kernel<_TYPE_, radius><<<grid, block, shared_memory_size>>>(input, output, N);
+    cudaMemcpy(h_output, output, dataSize, cudaMemcpyDeviceToHost);
+
+    _TYPE_ err_shared = 0;
+    for (int i = radius + 1; i < N - radius; i++)
+    {
+        err_shared += abs(h_output[i] - (2 * radius + 1));
+    }
+
+    // Measure 1st kernel execution time
     cudaEvent_t start, stop;
+    long operations = NREPEAT_KERNEL * static_cast<long>(N - 2 * radius) * (2 * radius + 1);// number of operations
+    //number of memory accesses, assuming perfect caching, input is read, output is modified and read 3xN
+    long mem_accesses = NREPEAT_KERNEL * static_cast<long>(N - 2 * radius) * 3; 
+
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
 
@@ -117,67 +138,16 @@ void stencil_cuda(const int MemSizeArraysMB)
     float ms;
     cudaEventElapsedTime(&ms, start, stop);
 
-    long operations = NREPEAT_KERNEL * static_cast<long>(N - 2 * radius) * (2 * radius + 1);         // number of operations
-    //number of memory accesses, assuming perfect caching, input is read, output is modified and read 3xN
-    long mem_accesses = NREPEAT_KERNEL * static_cast<long>(N - 2 * radius) * 3; 
-
     float tflops = operations / (ms / 1000.0f) / 1e12;
     float bw = sizeof(_TYPE_) * mem_accesses / (ms / 1000.0f) / GB;
+
     std::cout << "\n** stencil_cuda_kernel **\n";
     std::cout << "error = " << err << "\n";
     std::cout << "elapsed time = " << ms << " ms\n";
     std::cout << "FLOPS        = " << tflops << " TFLOPS\n";
     std::cout << "bandwith (assuming perfect caching) = " << bw << " GB/s\n";
 
-    // Cleanup
-    cudaFree(input);
-    cudaFree(output);
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
-
-    return;
-}
-
-template <typename _TYPE_, int radius>
-void stencil_cuda_shared_memory(const int MemSizeArraysMB)
-{
-
-    // dimension problem
-    const int N = MB * MemSizeArraysMB / sizeof(_TYPE_);
-    const int dataSize = N * sizeof(_TYPE_);
-
-    // Allocate GPU memory
-    _TYPE_ *input, *output, *h_output;
-
-    cudaMalloc((void **)&input, dataSize);
-    cudaMalloc((void **)&output, dataSize);
-
-    // Allocate CPU memory (for check)
-    h_output = (_TYPE_ *)malloc(dataSize);
-
-    // Dimension block and grid
-    dim3 block(BLOCK_SIZE);
-    dim3 grid((N + BLOCK_SIZE - 1) / BLOCK_SIZE);
-
-    // Shared memory size computation
-    const int shared_memory_size = (BLOCK_SIZE + 2 * radius) * sizeof(_TYPE_);
-
-    // Initialize data
-    set_to<_TYPE_><<<grid, block>>>(input, 1, N);
-    set_to<_TYPE_><<<grid, block>>>(output, 0, N);
-
-    // Check kernel works
-    stencil_cuda_shared_memory_kernel<_TYPE_, radius><<<grid, block, shared_memory_size>>>(input, output, N);
-    cudaMemcpy(h_output, output, dataSize, cudaMemcpyDeviceToHost);
-
-    _TYPE_ err = 0;
-    for (int i = radius + 1; i < N - radius; i++)
-    {
-        err += abs(h_output[i] - (2 * radius + 1));
-    }
-
     // Measure kernel execution time
-    cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
 
@@ -189,23 +159,18 @@ void stencil_cuda_shared_memory(const int MemSizeArraysMB)
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
 
-    float ms;
-    cudaEventElapsedTime(&ms, start, stop);
+    float ms_shared;
+    cudaEventElapsedTime(&ms_shared, start, stop);
 
-    long operations = NREPEAT_KERNEL * static_cast<long>(N - 2 * radius) * (2 * radius + 1);// number of operations
-    //number of memory accesses, assuming perfect caching, input is read, output is modified and read 3xN
-    long mem_accesses = NREPEAT_KERNEL * static_cast<long>(N - 2 * radius) * 3; 
-
-    float tflops = operations / (ms / 1000.0f) / 1e12;
-    float bw = sizeof(_TYPE_) * mem_accesses / (ms / 1000.0f) / GB;
+    float tflops_shared = operations / (ms_shared / 1000.0f) / 1e12;
+    float bw_shared = sizeof(_TYPE_) * mem_accesses / (ms_shared / 1000.0f) / GB;
 
     std::cout << "\n** stencil_cuda_shared_memory_kernel **\n";
-    std::cout << "error = " << err << "\n";
-    std::cout << "elapsed time = " << ms << " ms\n";
-    std::cout << "FLOPS        = " << tflops << " TFLOPS\n";
-    std::cout << "bandwith     = " << bw << " GB/s\n";
+    std::cout << "error = " << err_shared << "\n";
+    std::cout << "elapsed time = " << ms_shared << " ms\n";
+    std::cout << "FLOPS        = " << tflops_shared << " TFLOPS\n";
+    std::cout << "bandwith (assuming perfect caching) = " << bw_shared << " GB/s\n";
     std::cout << "shared memory allocated per block = " << ((float)shared_memory_size)/KB << "KB \n";
-
 
     // Cleanup
     cudaFree(input);
@@ -215,3 +180,4 @@ void stencil_cuda_shared_memory(const int MemSizeArraysMB)
 
     return;
 }
+
