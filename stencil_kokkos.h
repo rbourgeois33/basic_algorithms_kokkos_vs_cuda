@@ -9,6 +9,8 @@ template <typename _TYPE_, int radius>
 void stencil_kokkos_kernel(const View<_TYPE_> &input, View<_TYPE_> &output, const policy_t &policy)
 {
     Kokkos::parallel_for("stencil operation", policy, KOKKOS_LAMBDA(const int idx) {
+        
+        //Use a buffer ! crucial for performance
         _TYPE_ result = 0;
 
         for (int i = -radius; i <= radius; i++)
@@ -19,6 +21,22 @@ void stencil_kokkos_kernel(const View<_TYPE_> &input, View<_TYPE_> &output, cons
         output[idx] = result;
     });
 }
+
+template <typename _TYPE_, int radius>
+void stencil_kokkos_kernel_no_buffer(const View<_TYPE_> &input, View<_TYPE_> &output, const policy_t &policy)
+{
+    Kokkos::parallel_for("stencil operation no buffer", policy, KOKKOS_LAMBDA(const int idx) {
+        
+        //Use a buffer ! crucial for performance
+
+        for (int i = -radius; i <= radius; i++)
+        {
+            output[idx] += input[idx + i];
+        }
+
+    });
+}
+
 
 template <typename _TYPE_, int radius>
 void stencil_kokkos(const int MemSizeArraysMB, const int N_imposed = -1)
@@ -82,7 +100,29 @@ void stencil_kokkos(const int MemSizeArraysMB, const int N_imposed = -1)
     float tflops = operations / (ms / 1000.0f) / 1e12;
     float bw = sizeof(_TYPE_) * mem_accesses / (ms / 1000.0f) / GB;
 
-    std::cout << "\n** stencil_kokkos_kernel **\n";
+    std::cout << "\n** stencil_kokkos_kernel, dtype= "<<typeid(_TYPE_).name()<<" **\n";
+    std::cout << "error = " << err << "\n";
+    std::cout << "elapsed time = " << ms << " ms\n";
+    std::cout << "FLOPS        = " << tflops << " TFLOPS\n";
+    std::cout << "bandwith (assuming perfect caching) = " << bw << " GB/s\n";
+
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+
+    cudaEventRecord(start);
+    for (size_t n = 0; n < NREPEAT_KERNEL; n++)
+    {
+        stencil_kokkos_kernel_no_buffer<_TYPE_, radius>(input, output, stencil_policy);
+    }
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+
+    cudaEventElapsedTime(&ms, start, stop);
+
+    tflops = operations / (ms / 1000.0f) / 1e12;
+    bw = sizeof(_TYPE_) * mem_accesses / (ms / 1000.0f) / GB;
+
+    std::cout << "\n** stencil_kokkos_kernel_no_buffer, dtype= "<<typeid(_TYPE_).name()<<" **\n";
     std::cout << "error = " << err << "\n";
     std::cout << "elapsed time = " << ms << " ms\n";
     std::cout << "FLOPS        = " << tflops << " TFLOPS\n";

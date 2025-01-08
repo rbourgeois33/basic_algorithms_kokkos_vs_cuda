@@ -3,11 +3,13 @@
 #include <cuda_runtime.h>
 #include <chrono>
 #include <cmath>
+#include <typeinfo>
+
 
 #define GB (1024 * 1024 * 1024)
 #define MB (1024 * 1024)
 #define KB 1024
-#define BLOCK_SIZE 128
+#define BLOCK_SIZE 512
 #define NREPEAT_KERNEL 10
 #define NREPEAT_MEMCPY 10
 
@@ -35,7 +37,7 @@ int main(int argc, char *argv[])
 
     // We use arrays of memsize of a 100th of the global GMem
     const int MemSizeArraysMB = GlobalGMem_MB / 100;
-    const int stencil_radius = 50; // The larger the radius, the bigger the perf increase with shared mem
+    const int stencil_radius = 200; // The larger the radius, the bigger the perf increase with shared mem
 
     // Initialize Kokkos runtime
     Kokkos::initialize(argc, argv);
@@ -43,6 +45,8 @@ int main(int argc, char *argv[])
     { // Kokkos tests
         // stencil_kokkos<float, stencil_radius>(MemSizeArraysMB, /*small size for testing kernel*/ 5000);
         stencil_kokkos<float, stencil_radius>(MemSizeArraysMB);
+        //stencil_kokkos<double, stencil_radius>(MemSizeArraysMB);
+
     }
 
     // Finalize Kokkos runtime
@@ -51,7 +55,10 @@ int main(int argc, char *argv[])
     { // CUDA tests
         // stencil_cuda<float, stencil_radius>(MemSizeArraysMB, /*small size for testing kernel*/ 5000);
         stencil_cuda<float, stencil_radius>(MemSizeArraysMB);
+        //stencil_cuda<double, stencil_radius>(MemSizeArraysMB);
+
     }
+
 
     return 0;
 }
