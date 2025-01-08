@@ -1,61 +1,72 @@
+#include "utils_check_stencil.h"
+
+template <typename _TYPE_>
+__global__ void set_to_idx(_TYPE_ *array, int N)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if ((idx >= 0) && (idx < N))
+        array[idx] = (_TYPE_)idx;
+}
+
 template <typename _TYPE_>
 __global__ void set_to(_TYPE_ *array, _TYPE_ value, int N)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    array[idx] = value;
+    if ((idx >= 0) && (idx < N))
+        array[idx] = value;
 }
 
 template <typename _TYPE_, int radius>
 __global__ void stencil_cuda_kernel(_TYPE_ *input, _TYPE_ *output, int N)
-{   
-    //global index (spans from 0 to N)
+{
+    // global index (spans from 0 to N)
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
-    //We only do the stencil reduction in cells that have ar leats radius cells on their left/right
+    // We only do the stencil reduction in cells that have ar leats radius cells on their left/right
     if ((idx >= radius) && (idx < N - radius))
-    {   
-        //stencil operation (sum over neighbors)
-        for (int i = -radius; i <= radius; i++) 
+    {
+        // stencil operation (sum over neighbors)
+        for (int i = -radius; i <= radius; i++)
             output[idx] += input[idx + i];
     }
 }
 
 template <typename _TYPE_, int radius>
 __global__ void stencil_cuda_shared_memory_kernel(_TYPE_ *input, _TYPE_ *output, int N)
-{   
-    //global index (spans from 0 to N)
+{
+    // global index (spans from 0 to N)
     int gidx = blockIdx.x * blockDim.x + threadIdx.x;
-    //local index in the block (spans for 0 to blockDim.x)
+    // local index in the block (spans for 0 to blockDim.x)
     int idx_loc = threadIdx.x;
-    //local index offset by radius to match the shared memory array
+    // local index offset by radius to match the shared memory array
     int idx_shared = threadIdx.x + radius;
 
-    //Allocation of the shared memory, the size is from the 3rd launch parameter (extern keyword)
-    //Its the size of the bloc+2 radius for BC
+    // Allocation of the shared memory, the size is from the 3rd launch parameter (extern keyword)
+    // Its the size of the bloc+2 radius for BC
     extern __shared__ _TYPE_ shared[];
 
-    //Bound check (we fill the shared memory on the whole array)
+    // Bound check (we fill the shared memory on the whole array)
     if ((gidx >= 0) && (gidx < N))
     {
-        //Fill the shared memory
+        // Fill the shared memory
         shared[idx_shared] = input[gidx];
 
-        //The left threads fills the halo of the shared memiry
-        if ((idx_loc < radius) && (gidx-radius>=0))
+        // The left threads fills the halo of the shared memiry
+        if ((idx_loc < radius) && (gidx - radius >= 0))
         {
             shared[idx_shared - radius] = input[gidx - radius];
         }
 
-        //The right thread fills the halo of the shared memory
-        if ((idx_shared >= blockDim.x) && (gidx+radius<N))
+        // The right thread fills the halo of the shared memory
+        if ((idx_shared >= blockDim.x) && (gidx + radius < N))
         {
             shared[idx_shared + radius] = input[gidx + radius];
         }
 
-        //Memory needs to be synced
+        // Memory needs to be synced
         __syncthreads();
 
-        //Do the stencil operation
+        // Do the stencil operation
         if ((gidx >= radius) && (gidx < N - radius))
         {
             for (int i = -radius; i <= radius; i++)
@@ -67,11 +78,18 @@ __global__ void stencil_cuda_shared_memory_kernel(_TYPE_ *input, _TYPE_ *output,
 }
 
 template <typename _TYPE_, int radius>
-void stencil_cuda(const int MemSizeArraysMB)
+void stencil_cuda(const int MemSizeArraysMB, const int N_imposed = -1)
 {
+    // If N_imposed is provided, we scale the problem accordingly
+    // then we also assume that the user wants to test the kernel.
+    // We set input[i]=i and check the validity of the result to detect any indexing error
+    // This fails however for large value of N because of round-off error
+    // In non-test mode, we simply impose input[i]=1 and check that output[i]=2*radius+1
 
     // dimension problem
-    const int N = MB * MemSizeArraysMB / sizeof(_TYPE_);
+    const bool test_mode = N_imposed > 0 ? true : false;
+
+    const int N = test_mode ? N_imposed : MB * MemSizeArraysMB / sizeof(_TYPE_);
     const int dataSize = N * sizeof(_TYPE_);
 
     // Allocate GPU memory
@@ -91,7 +109,14 @@ void stencil_cuda(const int MemSizeArraysMB)
     const int shared_memory_size = (BLOCK_SIZE + 2 * radius) * sizeof(_TYPE_);
 
     // Initialize data
-    set_to<_TYPE_><<<grid, block>>>(input, 1, N);
+    if (test_mode)
+    {
+        set_to_idx<_TYPE_><<<grid, block>>>(input, N);
+    }
+    else
+    {
+        set_to<_TYPE_><<<grid, block>>>(input, 1, N);
+    }
     set_to<_TYPE_><<<grid, block>>>(output, 0, N);
 
     // Check 1st kernel works
@@ -101,11 +126,21 @@ void stencil_cuda(const int MemSizeArraysMB)
     _TYPE_ err = 0;
     for (int i = radius; i < N - radius; i++)
     {
-        err += abs(h_output[i] - (2 * radius + 1));
+        _TYPE_ sol_i = test_mode ? exact_result_stencil_kernel<_TYPE_, radius>(i) : (2 * radius + 1);
+        err += abs(h_output[i] - sol_i);
+        // std::cout <<i <<"  "<< h_output[i]-sol_i<<std::endl;
     }
 
     // re-initialize data
-    set_to<_TYPE_><<<grid, block>>>(input, 1, N);
+    // Initialize data
+    if (test_mode)
+    {
+        set_to_idx<_TYPE_><<<grid, block>>>(input, N);
+    }
+    else
+    {
+        set_to<_TYPE_><<<grid, block>>>(input, 1, N);
+    }
     set_to<_TYPE_><<<grid, block>>>(output, 0, N);
 
     // Check 2n kernel works
@@ -115,14 +150,15 @@ void stencil_cuda(const int MemSizeArraysMB)
     _TYPE_ err_shared = 0;
     for (int i = radius + 1; i < N - radius; i++)
     {
-        err_shared += abs(h_output[i] - (2 * radius + 1));
+        _TYPE_ sol_i = test_mode ? exact_result_stencil_kernel<_TYPE_, radius>(i) : (2 * radius + 1);
+        err_shared += abs(h_output[i] - sol_i);
     }
 
     // Measure 1st kernel execution time
     cudaEvent_t start, stop;
-    long operations = NREPEAT_KERNEL * static_cast<long>(N - 2 * radius) * (2 * radius + 1);// number of operations
-    //number of memory accesses, assuming perfect caching, input is read, output is modified and read 3xN
-    long mem_accesses = NREPEAT_KERNEL * static_cast<long>(N - 2 * radius) * 3; 
+    long operations = NREPEAT_KERNEL * static_cast<long>(N - 2 * radius) * (2 * radius + 1); // number of operations
+    // number of memory accesses, assuming perfect caching, input is read, output is modified and read 3xN
+    long mem_accesses = NREPEAT_KERNEL * static_cast<long>(N - 2 * radius) * 3;
 
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
@@ -147,7 +183,7 @@ void stencil_cuda(const int MemSizeArraysMB)
     std::cout << "FLOPS        = " << tflops << " TFLOPS\n";
     std::cout << "bandwith (assuming perfect caching) = " << bw << " GB/s\n";
 
-    // Measure kernel execution time
+    // Measure 2nd kernel execution time
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
 
@@ -170,7 +206,7 @@ void stencil_cuda(const int MemSizeArraysMB)
     std::cout << "elapsed time = " << ms_shared << " ms\n";
     std::cout << "FLOPS        = " << tflops_shared << " TFLOPS\n";
     std::cout << "bandwith (assuming perfect caching) = " << bw_shared << " GB/s\n";
-    std::cout << "shared memory allocated per block = " << ((float)shared_memory_size)/KB << "KB \n";
+    std::cout << "shared memory allocated per block = " << ((float)shared_memory_size) / KB << "KB \n";
 
     // Cleanup
     cudaFree(input);
@@ -180,4 +216,3 @@ void stencil_cuda(const int MemSizeArraysMB)
 
     return;
 }
-
