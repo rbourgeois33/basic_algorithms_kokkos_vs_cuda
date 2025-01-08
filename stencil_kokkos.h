@@ -9,10 +9,15 @@ template <typename _TYPE_, int radius>
 void stencil_kokkos_kernel(const View<_TYPE_> &input, View<_TYPE_> &output, const policy_t &policy)
 {
     Kokkos::parallel_for("stencil operation", policy, KOKKOS_LAMBDA(const int idx) {
-        for (int i=-radius; i<=radius; i++)
+        _TYPE_ result = 0;
+
+        for (int i = -radius; i <= radius; i++)
         {
-        output[idx] += input[idx+i];
-        } });
+            result += input[idx + i];
+        }
+
+        output[idx] = result;
+    });
 }
 
 template <typename _TYPE_, int radius>
@@ -57,8 +62,8 @@ void stencil_kokkos(const int MemSizeArraysMB, const int N_imposed = -1)
     // Measure 1st kernel execution time
     cudaEvent_t start, stop;
     long operations = NREPEAT_KERNEL * static_cast<long>(N - 2 * radius) * (2 * radius + 1); // number of operations
-    // number of memory accesses, assuming perfect caching, input is read, output is modified and read 3xN
-    long mem_accesses = NREPEAT_KERNEL * static_cast<long>(N - 2 * radius) * 3;
+    // number of memory accesses, assuming perfect caching, input is read, output is modified and read 2xN
+    long mem_accesses = NREPEAT_KERNEL * static_cast<long>(N - 2 * radius) * 2;
 
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
