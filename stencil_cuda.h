@@ -16,7 +16,7 @@ __global__ void set_to(_TYPE_ *array, _TYPE_ value, int N)
         array[idx] = value;
 }
 
-template <typename _TYPE_, int radius>
+template <typename _TYPE_, int radius, bool use_buffer=true>
 __global__ void stencil_cuda_kernel(_TYPE_ *input, _TYPE_ *output, int N)
 {
     // global index (spans from 0 to N)
@@ -26,32 +26,25 @@ __global__ void stencil_cuda_kernel(_TYPE_ *input, _TYPE_ *output, int N)
     if ((idx >= radius) && (idx < N - radius))
     {
         //Use a buffer ! crucial for performance
+
         _TYPE_ result = 0;
 
         // stencil operation (sum over neighbors)
         for (int i = -radius; i <= radius; i++)
-            result += input[idx + i];
-
-        output[idx] = result;
+        {
+            if constexpr(use_buffer)
+            {
+                result += input[idx + i];
+            }else
+            {
+                output[idx] += input[idx + i];
+            }
+        }
+        if constexpr(use_buffer) output[idx] = result;
     }
 }
 
-template <typename _TYPE_, int radius>
-__global__ void stencil_cuda_kernel_no_buffer(_TYPE_ *input, _TYPE_ *output, int N)
-{
-    // global index (spans from 0 to N)
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-
-    // We only do the stencil reduction in cells that have ar least radius cells on their left/right
-    if ((idx >= radius) && (idx < N - radius))
-    {
-        // stencil operation (sum over neighbors)
-        for (int i = -radius; i <= radius; i++)
-            output[idx] += input[idx + i];
-    }
-}
-
-template <typename _TYPE_, int radius>
+template <typename _TYPE_, int radius, bool use_buffer=true>
 __global__ void stencil_cuda_shared_memory_kernel(_TYPE_ *input, _TYPE_ *output, int N)
 {
     // global index (spans from 0 to N)
@@ -93,53 +86,17 @@ __global__ void stencil_cuda_shared_memory_kernel(_TYPE_ *input, _TYPE_ *output,
             _TYPE_ result = 0;
 
             for (int i = -radius; i <= radius; i++)
-                result += shared[idx_shared + i];
-
-            output[gidx] = result;
-        }
-    }
-}
-
-template <typename _TYPE_, int radius>
-__global__ void stencil_cuda_shared_memory_kernel_no_buffer(_TYPE_ *input, _TYPE_ *output, int N)
-{
-    // global index (spans from 0 to N)
-    int gidx = blockIdx.x * blockDim.x + threadIdx.x;
-    // local index in the block (spans for 0 to blockDim.x)
-    int idx_loc = threadIdx.x;
-    // local index offset by radius to match the shared memory array
-    int idx_shared = threadIdx.x + radius;
-
-    // Allocation of the shared memory, the size is from the 3rd launch parameter (extern keyword)
-    // Its the size of the bloc+2 radius for BC
-    extern __shared__ _TYPE_ shared[];
-
-    // Bound check (we fill the shared memory on the whole array)
-    if ((gidx >= 0) && (gidx < N))
-    {
-        // Fill the shared memory
-        shared[idx_shared] = input[gidx];
-
-        // The left threads fills the halo of the shared memiry
-        if ((idx_loc < radius) && (gidx - radius >= 0))
-        {
-            shared[idx_shared - radius] = input[gidx - radius];
-        }
-
-        // The right thread fills the halo of the shared memory
-        if ((idx_shared >= blockDim.x) && (gidx + radius < N))
-        {
-            shared[idx_shared + radius] = input[gidx + radius];
-        }
-
-        // Memory needs to be synced
-        __syncthreads();
-
-        // Do the stencil operation
-        if ((gidx >= radius) && (gidx < N - radius))
-        {
-            for (int i = -radius; i <= radius; i++)
-                output[gidx] += shared[idx_shared + i];
+            {
+                if constexpr(use_buffer)
+                {
+                    result += shared[idx_shared + i];
+                }else
+                {
+                    output[gidx] += shared[idx_shared + i];
+                }
+                
+            }
+            if constexpr(use_buffer) output[gidx] = result;
         }
     }
 }
@@ -147,6 +104,8 @@ __global__ void stencil_cuda_shared_memory_kernel_no_buffer(_TYPE_ *input, _TYPE
 template <typename _TYPE_, int radius>
 void stencil_cuda(const int MemSizeArraysMB, const int N_imposed = -1)
 {
+    std::cout<<"\n ||| CUDA KERNELS, dtype = "<< typeid(_TYPE_).name()<<" |||\n";
+
     // If N_imposed is provided, we scale the problem accordingly
     // then we also assume that the user wants to test the kernel.
     // We set input[i]=i and check the validity of the result to detect any indexing error
@@ -170,9 +129,13 @@ void stencil_cuda(const int MemSizeArraysMB, const int N_imposed = -1)
 
     // Dimension block and grid
     int NBLOCKS = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    
+    std::cout << "\nN, NBLOCKS, BLOCK_SIZE= " << N << " " << NBLOCKS << " " << BLOCK_SIZE << "\n";
+
 
     // Shared memory size computation
     const int shared_memory_size = (BLOCK_SIZE + 2 * radius) * sizeof(_TYPE_);
+    std::cout << "shared memory allocated per block = " << ((float)shared_memory_size) / KB << "KB \n";
 
     // Initialize data
     if (test_mode)
@@ -195,6 +158,7 @@ void stencil_cuda(const int MemSizeArraysMB, const int N_imposed = -1)
         _TYPE_ sol_i = test_mode ? exact_result_stencil_kernel<_TYPE_, radius>(i) : (2 * radius + 1);
         err += abs(h_output[i] - sol_i);
     }
+    std::cout << "stencil_cuda_kernel error (must be 0)="<< err<<std::endl;
 
     // re-initialize data
     // Initialize data
@@ -211,19 +175,19 @@ void stencil_cuda(const int MemSizeArraysMB, const int N_imposed = -1)
     // Check if we have enough shared memory to launch our configuration
     // This is not check automatically and can lead to errors
     //  Get device properties and size problems accordingly
-    cudaDeviceProp prop;
-    cudaGetDeviceProperties(&prop, 0);
-    const int n_simultaneous_blocs_per_sm = prop.maxThreadsPerMultiProcessor / BLOCK_SIZE;
-    const int total_simultaneous_shared_mem_requested_per_sm = n_simultaneous_blocs_per_sm * shared_memory_size;
+    // cudaDeviceProp prop;
+    // cudaGetDeviceProperties(&prop, 0);
+    // const int n_simultaneous_blocs_per_sm = prop.maxThreadsPerMultiProcessor / BLOCK_SIZE;
+    // const int total_simultaneous_shared_mem_requested_per_sm = n_simultaneous_blocs_per_sm * shared_memory_size;
 
-    if (total_simultaneous_shared_mem_requested_per_sm > prop.sharedMemPerMultiprocessor)
-    {
-        std::cout << "Warning: Total shared memory requested per SM " << total_simultaneous_shared_mem_requested_per_sm / KB << "KB exceeds the maximum shared memory available per SM " << prop.sharedMemPerMultiprocessor / KB << " KB" << std::endl;
-    }
-    if (shared_memory_size > prop.sharedMemPerBlock)
-    {
-        std::cout << "Error: Shared memory allocation exceeds the limit. Reduce radius or block size." << std::endl;
-    }
+    // if (total_simultaneous_shared_mem_requested_per_sm > prop.sharedMemPerMultiprocessor)
+    // {
+    //     std::cout << "Warning: Total shared memory requested per SM " << total_simultaneous_shared_mem_requested_per_sm / KB << "KB exceeds the maximum shared memory available per SM " << prop.sharedMemPerMultiprocessor / KB << " KB" << std::endl;
+    // }
+    // if (shared_memory_size > prop.sharedMemPerBlock)
+    // {
+    //     std::cout << "Error: Shared memory allocation exceeds the limit. Reduce radius or block size." << std::endl;
+    // }
     // End of check
 
     // Check 2n kernel works
@@ -236,6 +200,7 @@ void stencil_cuda(const int MemSizeArraysMB, const int N_imposed = -1)
         _TYPE_ sol_i = test_mode ? exact_result_stencil_kernel<_TYPE_, radius>(i) : (2 * radius + 1);
         err_shared += abs(h_output[i] - sol_i);
     }
+    std::cout << "stencil_cuda_shared_memory_kernel error (must be 0)="<<err_shared<<std::endl;
 
     // Measure 1st kernel execution time
     cudaEvent_t start, stop;
@@ -260,12 +225,7 @@ void stencil_cuda(const int MemSizeArraysMB, const int N_imposed = -1)
     float tflops = operations / (ms / 1000.0f) / 1e12;
     float bw = sizeof(_TYPE_) * mem_accesses / (ms / 1000.0f) / GB;
 
-    std::cout << "\n** stencil_cuda_kernel, dtype= "<<typeid(_TYPE_).name()<<" **\n";
-    std::cout << "error = " << err << "\n";
-    std::cout << "elapsed time = " << ms << " ms\n";
-    std::cout << "FLOPS        = " << tflops << " TFLOPS\n";
-    std::cout << "bandwith (assuming perfect caching) = " << bw << " GB/s\n";
-    std::cout << "N, NBLOCKS, BLOCK_SIZE= " << N << " " << NBLOCKS << " " << BLOCK_SIZE << "\n";
+    print_perf<_TYPE_>(operations, mem_accesses, ms, "** stencil_cuda_kernel **");
 
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
@@ -273,7 +233,7 @@ void stencil_cuda(const int MemSizeArraysMB, const int N_imposed = -1)
     cudaEventRecord(start);
     for (size_t n = 0; n < NREPEAT_KERNEL; n++)
     {
-        stencil_cuda_kernel_no_buffer<_TYPE_, radius><<<NBLOCKS, BLOCK_SIZE>>>(input, output, N);
+        stencil_cuda_kernel<_TYPE_, radius, false><<<NBLOCKS, BLOCK_SIZE>>>(input, output, N);
     }
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
@@ -283,12 +243,7 @@ void stencil_cuda(const int MemSizeArraysMB, const int N_imposed = -1)
     tflops = operations / (ms / 1000.0f) / 1e12;
     bw = sizeof(_TYPE_) * mem_accesses / (ms / 1000.0f) / GB;
 
-    std::cout << "\n** stencil_cuda_kernel_no_buffer, dtype= "<<typeid(_TYPE_).name()<<" **\n";
-    std::cout << "error = " << err << "\n";
-    std::cout << "elapsed time = " << ms << " ms\n";
-    std::cout << "FLOPS        = " << tflops << " TFLOPS\n";
-    std::cout << "bandwith (assuming perfect caching) = " << bw << " GB/s\n";
-    std::cout << "N, NBLOCKS, BLOCK_SIZE= " << N << " " << NBLOCKS << " " << BLOCK_SIZE << "\n";
+    print_perf<_TYPE_>(operations, mem_accesses, ms, "** stencil_cuda_kernel, no buffer **");
 
     // Measure 2nd kernel execution time
     cudaEventCreate(&start);
@@ -308,13 +263,7 @@ void stencil_cuda(const int MemSizeArraysMB, const int N_imposed = -1)
     float tflops_shared = operations / (ms_shared / 1000.0f) / 1e12;
     float bw_shared = sizeof(_TYPE_) * mem_accesses / (ms_shared / 1000.0f) / GB;
 
-    std::cout << "\n** stencil_cuda_shared_memory_kernel, dtype= "<<typeid(_TYPE_).name()<<" **\n";
-    std::cout << "error = " << err_shared << "\n";
-    std::cout << "elapsed time = " << ms_shared << " ms\n";
-    std::cout << "FLOPS        = " << tflops_shared << " TFLOPS\n";
-    std::cout << "bandwith (assuming perfect caching) = " << bw_shared << " GB/s\n";
-    std::cout << "shared memory allocated per block = " << ((float)shared_memory_size) / KB << "KB \n";
-    std::cout << "N, NBLOCKS, BLOCK_SIZE= " << N << " " << NBLOCKS << " " << BLOCK_SIZE << "\n";
+    print_perf<_TYPE_>(operations, mem_accesses, ms_shared, "** stencil_cuda_shared_memory_kernel **");
 
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
@@ -322,7 +271,7 @@ void stencil_cuda(const int MemSizeArraysMB, const int N_imposed = -1)
     cudaEventRecord(start);
     for (size_t n = 0; n < NREPEAT_KERNEL; n++)
     {
-        stencil_cuda_shared_memory_kernel_no_buffer<_TYPE_, radius><<<NBLOCKS, BLOCK_SIZE, shared_memory_size>>>(input, output, N);
+        stencil_cuda_shared_memory_kernel<_TYPE_, radius, false><<<NBLOCKS, BLOCK_SIZE, shared_memory_size>>>(input, output, N);
     }
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
@@ -332,13 +281,7 @@ void stencil_cuda(const int MemSizeArraysMB, const int N_imposed = -1)
     tflops_shared = operations / (ms_shared / 1000.0f) / 1e12;
     bw_shared = sizeof(_TYPE_) * mem_accesses / (ms_shared / 1000.0f) / GB;
 
-    std::cout << "\n** stencil_cuda_shared_memory_kernel_no_buffer, dtype= "<<typeid(_TYPE_).name()<<" **\n";
-    std::cout << "error = " << err_shared << "\n";
-    std::cout << "elapsed time = " << ms_shared << " ms\n";
-    std::cout << "FLOPS        = " << tflops_shared << " TFLOPS\n";
-    std::cout << "bandwith (assuming perfect caching) = " << bw_shared << " GB/s\n";
-    std::cout << "shared memory allocated per block = " << ((float)shared_memory_size) / KB << "KB \n";
-    std::cout << "N, NBLOCKS, BLOCK_SIZE= " << N << " " << NBLOCKS << " " << BLOCK_SIZE << "\n";
+    print_perf<_TYPE_>(operations, mem_accesses, ms_shared, "** stencil_cuda_shared_memory_kernel, no buffer **");
 
     // Cleanup
     cudaFree(input);

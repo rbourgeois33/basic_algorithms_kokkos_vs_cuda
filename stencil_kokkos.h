@@ -41,6 +41,8 @@ void stencil_kokkos_kernel_no_buffer(const View<_TYPE_> &input, View<_TYPE_> &ou
 template <typename _TYPE_, int radius>
 void stencil_kokkos(const int MemSizeArraysMB, const int N_imposed = -1)
 {
+    std::cout<<"\n ||| KOKKOS KERNELS, dtype = "<< typeid(_TYPE_).name()<<" |||\n";
+    
     // If N_imposed is provided, we scale the problem accordingly
     // then we also assume that the user wants to test the kernel.
     // We set input[i]=i and check the validity of the result to detect any indexing error
@@ -74,7 +76,6 @@ void stencil_kokkos(const int MemSizeArraysMB, const int N_imposed = -1)
     {
         _TYPE_ sol_i = test_mode ? exact_result_stencil_kernel<_TYPE_, radius>(i) : (2 * radius + 1);
         err += abs(mirror_output[i] - sol_i);
-        // std::cout <<i <<"  "<< h_output[i]-sol_i<<std::endl;
     }
 
     // Measure 1st kernel execution time
@@ -100,12 +101,8 @@ void stencil_kokkos(const int MemSizeArraysMB, const int N_imposed = -1)
     float tflops = operations / (ms / 1000.0f) / 1e12;
     float bw = sizeof(_TYPE_) * mem_accesses / (ms / 1000.0f) / GB;
 
-    std::cout << "\n** stencil_kokkos_kernel, dtype= "<<typeid(_TYPE_).name()<<" **\n";
-    std::cout << "error = " << err << "\n";
-    std::cout << "elapsed time = " << ms << " ms\n";
-    std::cout << "FLOPS        = " << tflops << " TFLOPS\n";
-    std::cout << "bandwith (assuming perfect caching) = " << bw << " GB/s\n";
-
+    print_perf<_TYPE_>(operations, mem_accesses, ms, "** stencil_kokkos_kernel **");
+     
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
 
@@ -122,9 +119,6 @@ void stencil_kokkos(const int MemSizeArraysMB, const int N_imposed = -1)
     tflops = operations / (ms / 1000.0f) / 1e12;
     bw = sizeof(_TYPE_) * mem_accesses / (ms / 1000.0f) / GB;
 
-    std::cout << "\n** stencil_kokkos_kernel_no_buffer, dtype= "<<typeid(_TYPE_).name()<<" **\n";
-    std::cout << "error = " << err << "\n";
-    std::cout << "elapsed time = " << ms << " ms\n";
-    std::cout << "FLOPS        = " << tflops << " TFLOPS\n";
-    std::cout << "bandwith (assuming perfect caching) = " << bw << " GB/s\n";
+    print_perf<_TYPE_>(operations, mem_accesses, ms, "** stencil_kokkos_kernel, no buffer **");
+
 }
