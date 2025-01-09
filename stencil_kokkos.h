@@ -5,7 +5,7 @@ using View = Kokkos::View<_TYPE_ *>;
 using Device = Kokkos::DefaultExecutionSpace;
 using policy_t = Kokkos::RangePolicy<Device>;
 
-template <typename _TYPE_, int radius>
+template <typename _TYPE_, int radius, bool use_buffer=true>
 void stencil_kokkos_kernel(const View<_TYPE_> &input, View<_TYPE_> &output, const policy_t &policy)
 {
     Kokkos::parallel_for("stencil operation", policy, KOKKOS_LAMBDA(const int idx) {
@@ -13,34 +13,33 @@ void stencil_kokkos_kernel(const View<_TYPE_> &input, View<_TYPE_> &output, cons
         //Use a buffer ! crucial for performance
         _TYPE_ result = 0;
 
+        if (use_buffer)
+        {
         for (int i = -radius; i <= radius; i++)
         {
             result += input[idx + i];
         }
-
         output[idx] = result;
-    });
-}
-
-template <typename _TYPE_, int radius>
-void stencil_kokkos_kernel_no_buffer(const View<_TYPE_> &input, View<_TYPE_> &output, const policy_t &policy)
-{
-    Kokkos::parallel_for("stencil operation no buffer", policy, KOKKOS_LAMBDA(const int idx) {
-        
-        //Use a buffer ! crucial for performance
-
+        }
+        else
+        {
         for (int i = -radius; i <= radius; i++)
         {
-            output[idx] += input[idx + i];
+             output[idx] += input[idx + i];
+        }
         }
 
     });
 }
 
-
 template <typename _TYPE_, int radius>
 void stencil_kokkos(const int MemSizeArraysMB, const int N_imposed = -1)
-{
+{   
+    //Timers
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+
     std::cout<<"\n ||| KOKKOS KERNELS, dtype = "<< typeid(_TYPE_).name()<<" |||\n";
     
     // If N_imposed is provided, we scale the problem accordingly
@@ -51,16 +50,22 @@ void stencil_kokkos(const int MemSizeArraysMB, const int N_imposed = -1)
 
     // dimension problem
     const bool test_mode = N_imposed > 0 ? true : false;
-
     const int N = test_mode ? N_imposed : MB * MemSizeArraysMB / sizeof(_TYPE_);
+
+    //Operation and accesses counts
+    // number of operations, stencil operation on the vector
+    long operations = NREPEAT_KERNEL * static_cast<long>(N - 2 * radius) * (2 * radius + 1); 
+    // number of memory accesses, assuming perfect caching, input is read, output is modified and read 3xN
+    long mem_accesses = NREPEAT_KERNEL * static_cast<long>(N - 2 * radius) * 2;
 
     // Allocate Views on GPU and CPU
     auto input = View<_TYPE_>("input", N);
     auto output = View<_TYPE_>("output", N);
     auto mirror_output = Kokkos::create_mirror_view(output);
 
-    // Initialize Views
+    // --------------------------------Verification stencil_kokkos_kernel-------------------------------- //
 
+    // Initialize Views
     Kokkos::parallel_for("init input", N, KOKKOS_LAMBDA(const int idx) { input[idx] = test_mode ? idx : 1; });
     Kokkos::parallel_for("init output", N, KOKKOS_LAMBDA(const int idx) { output[idx] = 0; });
 
@@ -77,16 +82,10 @@ void stencil_kokkos(const int MemSizeArraysMB, const int N_imposed = -1)
         _TYPE_ sol_i = test_mode ? exact_result_stencil_kernel<_TYPE_, radius>(i) : (2 * radius + 1);
         err += abs(mirror_output[i] - sol_i);
     }
+    std::cout << "stencil_kokkos_kernel error (must be 0)= "<<err<<std::endl;
 
-    // Measure 1st kernel execution time
-    cudaEvent_t start, stop;
-    long operations = NREPEAT_KERNEL * static_cast<long>(N - 2 * radius) * (2 * radius + 1); // number of operations
-    // number of memory accesses, assuming perfect caching, input is read, output is modified and read 2xN
-    long mem_accesses = NREPEAT_KERNEL * static_cast<long>(N - 2 * radius) * 2;
-
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
-
+    // --------------------------------Timing stencil_kokkos_kernel-------------------------------- //
+    
     cudaEventRecord(start);
     for (size_t n = 0; n < NREPEAT_KERNEL; n++)
     {
@@ -102,14 +101,13 @@ void stencil_kokkos(const int MemSizeArraysMB, const int N_imposed = -1)
     float bw = sizeof(_TYPE_) * mem_accesses / (ms / 1000.0f) / GB;
 
     print_perf<_TYPE_>(operations, mem_accesses, ms, "** stencil_kokkos_kernel **");
-     
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
+
+    // --------------------------------Timing stencil_kokkos_kernel with no buffer-------------------------------- //
 
     cudaEventRecord(start);
     for (size_t n = 0; n < NREPEAT_KERNEL; n++)
     {
-        stencil_kokkos_kernel_no_buffer<_TYPE_, radius>(input, output, stencil_policy);
+        stencil_kokkos_kernel<_TYPE_, radius, false>(input, output, stencil_policy);
     }
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
@@ -120,5 +118,4 @@ void stencil_kokkos(const int MemSizeArraysMB, const int N_imposed = -1)
     bw = sizeof(_TYPE_) * mem_accesses / (ms / 1000.0f) / GB;
 
     print_perf<_TYPE_>(operations, mem_accesses, ms, "** stencil_kokkos_kernel, no buffer **");
-
 }

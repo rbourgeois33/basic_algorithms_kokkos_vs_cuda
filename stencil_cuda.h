@@ -104,6 +104,12 @@ __global__ void stencil_cuda_shared_memory_kernel(_TYPE_ *input, _TYPE_ *output,
 template <typename _TYPE_, int radius>
 void stencil_cuda(const int MemSizeArraysMB, const int N_imposed = -1)
 {
+    //Timers
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+
+
     std::cout<<"\n ||| CUDA KERNELS, dtype = "<< typeid(_TYPE_).name()<<" |||\n";
 
     // If N_imposed is provided, we scale the problem accordingly
@@ -114,9 +120,14 @@ void stencil_cuda(const int MemSizeArraysMB, const int N_imposed = -1)
 
     // dimension problem
     const bool test_mode = N_imposed > 0 ? true : false;
-
     const int N = test_mode ? N_imposed : MB * MemSizeArraysMB / sizeof(_TYPE_);
     const int dataSize = N * sizeof(_TYPE_);
+
+    //Operation and accesses counts
+    // number of operations, stencil operation on the vector
+    long operations = NREPEAT_KERNEL * static_cast<long>(N - 2 * radius) * (2 * radius + 1); 
+    // number of memory accesses, assuming perfect caching, input is read, output is modified and read 3xN
+    long mem_accesses = NREPEAT_KERNEL * static_cast<long>(N - 2 * radius) * 2;
 
     // Allocate GPU memory
     _TYPE_ *input, *output, *h_output;
@@ -129,7 +140,6 @@ void stencil_cuda(const int MemSizeArraysMB, const int N_imposed = -1)
 
     // Dimension block and grid
     int NBLOCKS = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
-    
     std::cout << "\nN, NBLOCKS, BLOCK_SIZE= " << N << " " << NBLOCKS << " " << BLOCK_SIZE << "\n";
 
 
@@ -137,6 +147,7 @@ void stencil_cuda(const int MemSizeArraysMB, const int N_imposed = -1)
     const int shared_memory_size = (BLOCK_SIZE + 2 * radius) * sizeof(_TYPE_);
     std::cout << "shared memory allocated per block = " << ((float)shared_memory_size) / KB << "KB \n";
 
+    // --------------------------------Verification stencil_cuda_kernel-------------------------------- //
     // Initialize data
     if (test_mode)
     {
@@ -160,8 +171,9 @@ void stencil_cuda(const int MemSizeArraysMB, const int N_imposed = -1)
     }
     std::cout << "stencil_cuda_kernel error (must be 0)="<< err<<std::endl;
 
+    // --------------------------------Verification stencil_cuda_shared_memory_kernel -------------------------------- //
+
     // re-initialize data
-    // Initialize data
     if (test_mode)
     {
         set_to_idx<_TYPE_><<<NBLOCKS, BLOCK_SIZE>>>(input, N);
@@ -202,15 +214,9 @@ void stencil_cuda(const int MemSizeArraysMB, const int N_imposed = -1)
     }
     std::cout << "stencil_cuda_shared_memory_kernel error (must be 0)="<<err_shared<<std::endl;
 
+    // --------------------------------Timing stencil_cuda_kernel-------------------------------- //
+
     // Measure 1st kernel execution time
-    cudaEvent_t start, stop;
-    long operations = NREPEAT_KERNEL * static_cast<long>(N - 2 * radius) * (2 * radius + 1); // number of operations
-    // number of memory accesses, assuming perfect caching, input is read, output is modified and read 3xN
-    long mem_accesses = NREPEAT_KERNEL * static_cast<long>(N - 2 * radius) * 2;
-
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
-
     cudaEventRecord(start);
     for (size_t n = 0; n < NREPEAT_KERNEL; n++)
     {
@@ -226,9 +232,8 @@ void stencil_cuda(const int MemSizeArraysMB, const int N_imposed = -1)
     float bw = sizeof(_TYPE_) * mem_accesses / (ms / 1000.0f) / GB;
 
     print_perf<_TYPE_>(operations, mem_accesses, ms, "** stencil_cuda_kernel **");
-
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
+    
+    // --------------------------------Timing stencil_cuda_kernel with no buffer-------------------------------- //
 
     cudaEventRecord(start);
     for (size_t n = 0; n < NREPEAT_KERNEL; n++)
@@ -237,7 +242,6 @@ void stencil_cuda(const int MemSizeArraysMB, const int N_imposed = -1)
     }
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
-
     cudaEventElapsedTime(&ms, start, stop);
 
     tflops = operations / (ms / 1000.0f) / 1e12;
@@ -245,9 +249,9 @@ void stencil_cuda(const int MemSizeArraysMB, const int N_imposed = -1)
 
     print_perf<_TYPE_>(operations, mem_accesses, ms, "** stencil_cuda_kernel, no buffer **");
 
+    // --------------------------------Timing stencil_cuda_shared_memory_kernel-------------------------------- //
+
     // Measure 2nd kernel execution time
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
 
     cudaEventRecord(start);
     for (size_t n = 0; n < NREPEAT_KERNEL; n++)
@@ -264,9 +268,8 @@ void stencil_cuda(const int MemSizeArraysMB, const int N_imposed = -1)
     float bw_shared = sizeof(_TYPE_) * mem_accesses / (ms_shared / 1000.0f) / GB;
 
     print_perf<_TYPE_>(operations, mem_accesses, ms_shared, "** stencil_cuda_shared_memory_kernel **");
-
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
+    
+    // --------------------------------Timing stencil_cuda_shared_memory_kernel with no buffer-------------------------------- //
 
     cudaEventRecord(start);
     for (size_t n = 0; n < NREPEAT_KERNEL; n++)
