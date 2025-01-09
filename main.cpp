@@ -10,8 +10,7 @@
 #define MB (1024 * 1024)
 #define KB 1024
 #define BLOCK_SIZE 512
-#define NREPEAT_KERNEL 10
-#define NREPEAT_MEMCPY 10
+#define NREPEAT_KERNEL 30
 
 #include "stencil_cuda.h"
 #include "stencil_kokkos.h"
@@ -37,7 +36,7 @@ int main(int argc, char *argv[])
 
     // We use arrays of memsize of a 100th of the global GMem
     const int MemSizeArraysMB = GlobalGMem_MB / 100;
-    const int stencil_radius = 200; // The larger the radius, the bigger the perf increase with shared mem
+    const int stencil_radius = 10; // The larger the radius, the bigger the perf increase with shared mem
 
     // Initialize Kokkos runtime
     Kokkos::initialize(argc, argv);

@@ -20,7 +20,7 @@ template <typename _TYPE_, int radius, bool use_buffer=true>
 __global__ void stencil_cuda_kernel(_TYPE_ *input, _TYPE_ *output, int N)
 {
     // global index (spans from 0 to N)
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int  idx = blockIdx.x * blockDim.x + threadIdx.x;
 
     // We only do the stencil reduction in cells that have ar least radius cells on their left/right
     if ((idx >= radius) && (idx < N - radius))
@@ -48,15 +48,14 @@ template <typename _TYPE_, int radius, bool use_buffer=true>
 __global__ void stencil_cuda_shared_memory_kernel(_TYPE_ *input, _TYPE_ *output, int N)
 {
     // global index (spans from 0 to N)
-    int gidx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int  gidx = blockIdx.x * blockDim.x + threadIdx.x;
     // local index in the block (spans for 0 to blockDim.x)
-    int idx_loc = threadIdx.x;
+    const int  idx_loc = threadIdx.x;
     // local index offset by radius to match the shared memory array
-    int idx_shared = threadIdx.x + radius;
+    const int  idx_shared = threadIdx.x + radius;
 
-    // Allocation of the shared memory, the size is from the 3rd launch parameter (extern keyword)
-    // Its the size of the bloc+2 radius for BC
-    extern __shared__ _TYPE_ shared[];
+    // Allocation of the shared memory
+    __shared__ _TYPE_ shared[BLOCK_SIZE +2*radius];
 
     // Bound check (we fill the shared memory on the whole array)
     if ((gidx >= 0) && (gidx < N))
@@ -256,7 +255,7 @@ void stencil_cuda(const int MemSizeArraysMB, const int N_imposed = -1)
     cudaEventRecord(start);
     for (size_t n = 0; n < NREPEAT_KERNEL; n++)
     {
-        stencil_cuda_shared_memory_kernel<_TYPE_, radius><<<NBLOCKS, BLOCK_SIZE, shared_memory_size>>>(input, output, N);
+        stencil_cuda_shared_memory_kernel<_TYPE_, radius><<<NBLOCKS, BLOCK_SIZE>>>(input, output, N);
     }
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
@@ -274,7 +273,7 @@ void stencil_cuda(const int MemSizeArraysMB, const int N_imposed = -1)
     cudaEventRecord(start);
     for (size_t n = 0; n < NREPEAT_KERNEL; n++)
     {
-        stencil_cuda_shared_memory_kernel<_TYPE_, radius, false><<<NBLOCKS, BLOCK_SIZE, shared_memory_size>>>(input, output, N);
+        stencil_cuda_shared_memory_kernel<_TYPE_, radius, false><<<NBLOCKS, BLOCK_SIZE>>>(input, output, N);
     }
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
