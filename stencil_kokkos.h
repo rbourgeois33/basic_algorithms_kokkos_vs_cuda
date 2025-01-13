@@ -86,6 +86,28 @@ void stencil_kokkos_scratch_memory_kernel(const View<_TYPE_> &input, View<_TYPE_
     });
 }
 
+template <typename _TYPE_, int radius, bool use_buffer=true>
+void stencil_kokkos_scratch_memory_kernel2(const View<_TYPE_> &input, View<_TYPE_> &output, const team_policy_t &team_policy)
+{
+    Kokkos::parallel_for("stencil operation scratch memory", team_policy, KOKKOS_LAMBDA(member_type team_member) {
+
+        //size scratch
+        const int size_scratch = team_member.team_size() + 2 * radius;        
+        // Allocate scratch memory
+        auto scratch = ScratchView<_TYPE_>(team_member.team_scratch(0), size_scratch);
+
+       // printf("%d %d\n",team_member.league_size(), team_member.team_size());
+
+        //Fill scratch memory
+        Kokkos::parallel_for(Kokkos::TeamVectorRange(team_member, size_scratch), [=] (int& idx) 
+        {
+            //printf("%d\n", idx);
+        });
+
+    });
+}
+
+
 
 template <typename _TYPE_, int radius>
 void stencil_kokkos(const int MemSizeArraysMB, const int N_imposed = -1)
@@ -183,7 +205,8 @@ void stencil_kokkos(const int MemSizeArraysMB, const int N_imposed = -1)
 
     //kokkos::auto: amount of threads per block
     //level of the scratch memory: 0--> shared/L1, 1=global
-    team_policy_t team_policy = team_policy_t(league_size, BLOCK_SIZE).set_scratch_size(0, Kokkos::PerTeam(scratch_memory_size));
+    const int team_size = BLOCK_SIZE;
+    team_policy_t team_policy = team_policy_t(league_size, team_size).set_scratch_size(0, Kokkos::PerTeam(scratch_memory_size));
     std::cout << "\nN, league_size, team_size= " << N << " " <<team_policy.league_size() << " " << team_policy.team_size() << "\n";
     
     // --------------------------------Verification stencil_kokkos_scratch_memory_kernel-------------------------------- //
@@ -237,4 +260,10 @@ void stencil_kokkos(const int MemSizeArraysMB, const int N_imposed = -1)
     bw = sizeof(_TYPE_) * mem_accesses / (ms / 1000.0f) / GB;
 
     print_perf<_TYPE_>(operations, mem_accesses, ms, "** stencil_kokkos_scratch_memory_kernel, no buffer **");    
+
+    const int league_size2=N;
+    team_policy = team_policy_t(league_size2, Kokkos::AUTO).set_scratch_size(0, Kokkos::PerThread(sizeof(_TYPE_)),
+    Kokkos::PerTeam(2*radius));
+    
+    stencil_kokkos_scratch_memory_kernel2<_TYPE_, radius>(input, output, team_policy);
 }
