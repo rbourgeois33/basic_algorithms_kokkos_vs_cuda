@@ -27,8 +27,9 @@ void streams_kokkos(const int MemSizeArraysMB)
     // Allocate Views on GPU and CPU
     auto data = View<_TYPE_>("data", dataSize);
     auto h_data = HostView<_TYPE_>("h_data", dataSize);
+    auto hp_data = HostPinnedView<_TYPE_>("hp_data", dataSize);
 
-    // Naive implem
+    // -- Naive implem
     auto policy = policy_t(0, dataSize);
 
     cudaEventRecord(start);
@@ -40,39 +41,63 @@ void streams_kokkos(const int MemSizeArraysMB)
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
 
-    float ms_naive;
-    cudaEventElapsedTime(&ms_naive, start, stop);
+    float ms_naive_host;
+    cudaEventElapsedTime(&ms_naive_host, start, stop);
 
-    std::cout << "kokkos naive time (longer than cuda because non pinned !): " << ms_naive << "\n";
+    std::cout << "kokkos default host: " << ms_naive_host << "\n";
 
-    Device device;
-    
-    int nInstances = 5;
-    // Create a vector of size nInstances, initialized with 1
-    std::vector<int> weights(nInstances, 1); 
+    // -- Naive implem - pinned
+    HostPinned hostPinned;
 
+    cudaEventRecord(start);
+
+    Kokkos::deep_copy(data, hp_data);
+    kokkos_kernel<_TYPE_>(data, policy);
+    Kokkos::deep_copy(hp_data, data);
+
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+
+    float ms_naive_host_pinned;
+    cudaEventElapsedTime(&ms_naive_host_pinned, start, stop);
+
+    std::cout << "kokkos pinned host: " << ms_naive_host_pinned << "\n";
+
+    //We divide the work into ndiv parts that will take place in two instances (2 streams)
+    int nInstances = 2;
+    const int ndiv = 20; 
+
+    // Create the instances
+    Device device; //exec space to pass as argument below
+    std::vector<int> weights(nInstances, 1); //vector of weights 1
     auto Instances = Kokkos::Experimental::partition_space(device, weights);
-    policy_t policies[nInstances];
-    View<_TYPE_> subviews[nInstances];
-    HostView<_TYPE_> h_subviews[nInstances];
 
-    const int streamSize = dataSize / nInstances;
+    //declare subviews and policies
+    View<_TYPE_> subviews[ndiv];
+    HostPinnedView<_TYPE_> hp_subviews[ndiv];   //Pinned !!! otherwise D2H is blocking !!
+    policy_t policies[ndiv]; 
 
-    for (size_t i = 0; i < nInstances; i++)
+    const int streamSize = dataSize / ndiv;
+    
+    //initialize subviews to separate the work in ndiv parts (unmanaged, no allocation)
+    //also initialize the policies
+    for (size_t i = 0; i < ndiv; i++)
     {
+        int instance_id = i%2;
         const int beg = i * streamSize;
         const int end = (i + 1) * streamSize > dataSize ? dataSize - beg : (i + 1) * streamSize;
-        policies[i] = policy_t(Instances[i], beg, end);
+        policies[i] = policy_t(Instances[instance_id], beg, end);
         subviews[i] = Kokkos::subview(data, std::make_pair(beg, end));
-        h_subviews[i] = Kokkos::subview(h_data, std::make_pair(beg, end));
+        hp_subviews[i] = Kokkos::subview(hp_data, std::make_pair(beg, end));
     }
 
     cudaEventRecord(start);
-    for (size_t i = 0; i < nInstances; i++)
+    for (size_t i = 0; i < ndiv; i++)
     {
-        Kokkos::deep_copy(Instances[i], subviews[i], h_subviews[i]);
-        //kokkos_kernel<_TYPE_>(data, policies[i]);
-        Kokkos::deep_copy(Instances[i], h_subviews[i], subviews[i]);
+        int instance_id = i%2;
+        Kokkos::deep_copy(Instances[instance_id], subviews[i], hp_subviews[i]);
+        kokkos_kernel<_TYPE_>(data, policies[i]);
+        Kokkos::deep_copy(Instances[instance_id], hp_subviews[i], subviews[i]);
     }
 
     cudaEventRecord(stop);
@@ -81,4 +106,5 @@ void streams_kokkos(const int MemSizeArraysMB)
     float ms_stream;
     cudaEventElapsedTime(&ms_stream, start, stop);
     std::cout << "kokkos nInstances" << nInstances << "  time: " << ms_stream << "\n";
+    std::cout << "NOTE: Concurrency requires pinned memory on the host !\n";
 }
