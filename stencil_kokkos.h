@@ -1,18 +1,3 @@
-
-// Kokkos aliases
-template <typename _TYPE_>
-using View = Kokkos::View<_TYPE_ *>;
-using Device = Kokkos::DefaultExecutionSpace;
-using policy_t = Kokkos::RangePolicy<Device>;
-using team_policy_t = Kokkos::TeamPolicy<Device>;
-using member_type = team_policy_t::member_type;
-using ScratchSpace = Device::scratch_memory_space;
-using Unmanaged = Kokkos::MemoryTraits<Kokkos::Unmanaged>;
-
-//Scratch views must be unmanaged
-template <typename _TYPE_>
-using ScratchView = Kokkos::View<_TYPE_ *, ScratchSpace, Unmanaged>;
-
 template <typename _TYPE_, int radius, bool use_buffer=true>
 void stencil_kokkos_kernel(const View<_TYPE_> &input, View<_TYPE_> &output, const policy_t &policy)
 {
