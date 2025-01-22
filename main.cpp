@@ -12,8 +12,11 @@
 #define BLOCK_SIZE 512
 #define NREPEAT_KERNEL 30
 
+#include "kokkos_aliases.h"
 #include "stencil_cuda.h"
 #include "stencil_kokkos.h"
+#include "streams_cuda.h"
+#include "streams_kokkos.h"
 
 int main(int argc, char *argv[])
 {
@@ -38,14 +41,14 @@ int main(int argc, char *argv[])
     const int MemSizeArraysMB = GlobalGMem_MB / 100;
     const int stencil_radius = 10; // The larger the radius, the bigger the perf increase with shared mem
 
-    // Initialize Kokkos runtime
+    //Initialize Kokkos runtime
     Kokkos::initialize(argc, argv);
 
     { // Kokkos tests
         // stencil_kokkos<float, stencil_radius>(MemSizeArraysMB, /*small size for testing kernel*/ 5000);
-        stencil_kokkos<float, stencil_radius>(MemSizeArraysMB);
+        //stencil_kokkos<float, stencil_radius>(MemSizeArraysMB);
         //stencil_kokkos<double, stencil_radius>(MemSizeArraysMB);
-
+        //streams_kokkos<double>(MemSizeArraysMB*2);
     }
 
     // Finalize Kokkos runtime
@@ -53,11 +56,10 @@ int main(int argc, char *argv[])
 
     { // CUDA tests
         // stencil_cuda<float, stencil_radius>(MemSizeArraysMB, /*small size for testing kernel*/ 5000);
-        stencil_cuda<float, stencil_radius>(MemSizeArraysMB);
+        //stencil_cuda<float, stencil_radius>(MemSizeArraysMB);
         //stencil_cuda<double, stencil_radius>(MemSizeArraysMB);
-
+        streams_cuda<double>(MemSizeArraysMB*2);
     }
-
 
     return 0;
 }
