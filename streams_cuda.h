@@ -1,7 +1,7 @@
 
 // Compute bound kernel: performs multiply-add operations
 template <typename _TYPE_>
-__global__ void GPUKernel(_TYPE_ *data, const int offset, const int dataSize)
+__global__ void cuda_kernel(_TYPE_ *data, const int offset, const int dataSize)
 {
 
     int idx = offset + blockIdx.x * blockDim.x + threadIdx.x;
@@ -51,7 +51,7 @@ void streams_cuda(const int MemSizeArraysMB, const int N_imposed = -1)
     // Naive implem
     cudaEventRecord(start);
     cudaMemcpy(data, h_data, dataBytes, cudaMemcpyHostToDevice);
-    GPUKernel<<<NBLOCKS, BLOCK_SIZE>>>(data, 0, dataSize);
+    cuda_kernel<<<NBLOCKS, BLOCK_SIZE>>>(data, 0, dataSize);
     cudaMemcpy(h_data, data, dataBytes, cudaMemcpyDeviceToHost);
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
@@ -59,12 +59,10 @@ void streams_cuda(const int MemSizeArraysMB, const int N_imposed = -1)
     float ms_naive;
     cudaEventElapsedTime(&ms_naive, start, stop);
 
-    std::cout << "naive time: " << ms_naive << "\n";
+    std::cout << "cuda naive time: " << ms_naive << "\n";
 
-
-    // try several nStreams
-
-    for (int nStreams = 1; nStreams < 20; nStreams += 1)
+    //try several nStreams
+    for (int nStreams = 20; nStreams <= 20; nStreams += 1)
     {
         const int streamSize = dataSize / nStreams;
         int streamBytes = streamSize * sizeof(_TYPE_);
@@ -87,7 +85,7 @@ void streams_cuda(const int MemSizeArraysMB, const int N_imposed = -1)
             // you have to use &. data[offset] is the offset-th element, & data[offset] is the adress of the offset-th element
             cudaMemcpyAsync(&data[offset], &h_data[offset], streamBytes, cudaMemcpyHostToDevice, streams[i]);
             // 0 shared memory allocated
-            GPUKernel<<<NBLOCKSstream, BLOCK_SIZE, 0, streams[i]>>>(data, offset, dataSize);
+            cuda_kernel<<<NBLOCKSstream, BLOCK_SIZE, 0, streams[i]>>>(data, offset, dataSize);
             cudaMemcpyAsync(&h_data[offset], &data[offset], streamBytes, cudaMemcpyDeviceToHost, streams[i]);
         }
         cudaEventRecord(stop);
@@ -95,13 +93,49 @@ void streams_cuda(const int MemSizeArraysMB, const int N_imposed = -1)
 
         float ms_stream;
         cudaEventElapsedTime(&ms_stream, start, stop);
-        std::cout << "nStreams" << nStreams << "  time: " << ms_stream << "\n";
+        std::cout << "cuda nStreams" << nStreams << "  time: " << ms_stream << "\n";
 
         for (size_t i = 0; i < nStreams; i++)
         {
             cudaStreamDestroy(streams[i]);
         };
     }
+
+    //Only two streams, sharing chunks of ndiv-th of the work
+    const int ndiv=20;
+    const int streamSize = dataSize / ndiv;
+    int streamBytes = streamSize * sizeof(_TYPE_);
+    cudaStream_t streams[2];
+    int NBLOCKSstream = (streamSize + BLOCK_SIZE - 1) / BLOCK_SIZE;
+
+    cudaStreamCreate(&streams[0]);
+    cudaStreamCreate(&streams[1]);
+
+    cudaEventRecord(start);
+
+    for (size_t i = 0; i < ndiv; i++)
+    {
+        int stream_id = i%2;
+        const int offset = i * streamSize;
+        if (offset + streamSize >= dataSize)
+        {
+            streamBytes = (dataSize - offset) * sizeof(_TYPE_);
+        }
+        // you have to use &. data[offset] is the offset-th element, & data[offset] is the adress of the offset-th element
+        cudaMemcpyAsync(&data[offset], &h_data[offset], streamBytes, cudaMemcpyHostToDevice, streams[stream_id]);
+        // 0 shared memory allocated
+        cuda_kernel<<<NBLOCKSstream, BLOCK_SIZE, 0, streams[stream_id]>>>(data, offset, dataSize);
+        cudaMemcpyAsync(&h_data[offset], &data[offset], streamBytes, cudaMemcpyDeviceToHost, streams[stream_id]);
+    }
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+
+    float ms_stream_2;
+    cudaEventElapsedTime(&ms_stream_2, start, stop);
+    std::cout << "cuda two streams, ndiv:" << ndiv << "  time: " << ms_stream_2 << "\n";
+    
+    cudaStreamDestroy(streams[0]);
+    cudaStreamDestroy(streams[1]);
 
     // Free memory
     cudaFreeHost(h_data);
